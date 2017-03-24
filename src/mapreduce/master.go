@@ -71,6 +71,8 @@ func Sequential(jobName string, files []string, nreduce int,
 	}, func() {
 		mr.stats = []int{len(files) + nreduce}
 	})
+	defer debug("g_total_reduced_words %v\n", g_total_reduced_words)
+	defer debug("g_total_words_mapped %v\n", g_total_words_mapped)
 	return
 }
 

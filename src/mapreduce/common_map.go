@@ -6,7 +6,7 @@ import (
 	"os"
 	"encoding/json"
 )
-
+var g_total_words_mapped int = 0
 // doMap does the job of a map worker: it reads one of the input files
 // (inFile), calls the user-defined map function (mapF) for that file's
 // contents, and partitions the output into nReduce intermediate files.
@@ -53,6 +53,8 @@ func doMap(
 
 	file.Close()
 	kv := mapF(inFile, string(data))
+	g_total_words_mapped += len(kv)
+
 	filesenc := make([]*json.Encoder,nReduce)
 	files := make([]*os.File,nReduce)
 	for rid := 0; rid < nReduce; rid++ {
@@ -66,7 +68,7 @@ func doMap(
 	for _,keyval := range kv {
 		//fmt.Println(keyval.Key)
 		index := ihash(keyval.Key)
-		filesenc[index%uint32(nReduce)].Encode(&keyval)
+		filesenc[index % uint32(nReduce)].Encode(&keyval)
 	}
 	for _,file := range files {
 		file.Close()

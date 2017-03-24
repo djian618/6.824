@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"sort"
 )
-
+// this variable is used to test if the reduced words is the same as the mapped words
+var g_total_reduced_words int = 0
 
 // doReduce does the job of a reduce worker: it reads the intermediate
 // key/value pairs (produced by the map phase) for this task, sorts the
@@ -44,35 +45,40 @@ func doReduce(
 		file, err :=  os.Open(reduceName(jobName, i, reduceTaskNumber))
 		if err != nil {
 			fmt.Print(err)
-		}
-		dec := json.NewDecoder(file)
-		for dec.More() {
-			var kv KeyValue 
-			err := dec.Decode(&kv)
-			if err != nil {
-				fmt.Print(err)
+		}else {
+			dec := json.NewDecoder(file)
+			for {
+				var kv KeyValue 
+				err := dec.Decode(&kv)
+				if err != nil {
+					break
+				}
+				_, ok := kv_map[kv.Key]
+				if(!ok) {
+					kv_map[kv.Key] = make([]string, 0)
+				}
+				kv_map[kv.Key] = append(kv_map[kv.Key], kv.Value)
 			}
-			kv_map[kv.Key] = append(kv_map[kv.Key], kv.Value)
+			file.Close()
 		}
-		file.Close()
 	}
 	
-	keys := make([] string, len(kv_map) )
-	
+	//keys := make([] string, len(kv_map) )
+	var keys [] string
 	for key,_ := range kv_map {
 		keys = append(keys, key)
 	}
-	
+
 	sort.Strings(keys)  // 递增排序
+	g_total_reduced_words += len(keys)
+
+	mergefile,_ := os.Create(mergeName(jobName, reduceTaskNumber))
 	
-	mergefile,err := os.Create(mergeName(jobName, reduceTaskNumber))
-	if(err != nil) {
-		fmt.Print(err)
-	}
 	enc := json.NewEncoder(mergefile)
 
-	for _,key := range keys {
-		enc.Encode(KeyValue{key, reduceF(key, kv_map[key])})
+	for _,k := range keys {
+		//fmt.Println(key)
+		enc.Encode(KeyValue{k, reduceF(k, kv_map[k])})
 	}
 	mergefile.Close()
 }

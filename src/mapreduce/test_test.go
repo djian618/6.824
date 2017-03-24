@@ -35,6 +35,7 @@ func MapFunc(file string, value string) (res []KeyValue) {
 
 // Just return key
 func ReduceFunc(key string, values []string) string {
+	//debug("values is %v\n", values)
 	for _, e := range values {
 		debug("Reduce %s %v\n", key, e)
 	}
