@@ -1,41 +1,68 @@
 package mapreduce
 
-import "fmt"
+import (
+	"fmt"
+    "sync"
+    "strconv"
+    "strings"
+)
 
 
-func (mr *Master) WorkerThread(u_fin_task *int, fin_task *int, argtemplate DoTaskArgs, 
-	workername string, ntasks int, scheduleFinish chan bool) {
-	fmt.Printf("Worker: %s thread is scheduled to work\n", workername)
-	for {
-		mr.Lock()
-		if( (*u_fin_task)>=ntasks ) {
-			mr.Unlock()
-			return
-		}
-		next_file_name := mr.files[*u_fin_task]
-		(*u_fin_task)++
-		mr.Unlock()
-
-		next_task := argtemplate
-		next_task.File = next_file_name
-		next_task.TaskNumber = (*u_fin_task)
-		ok := call(workername, "Worker.DoTask", next_task, new(struct{}))
-		if(ok == false) {
-			fmt.Printf("Worker: RPC %s DoTask error\n", workername)
-		}
-
-		mr.Lock()
-		(*fin_task)++
-		fmt.Printf("Worker: %s  has finished %d task\n", workername, (*fin_task))
-
-		if( (*fin_task)>=ntasks ) {
-			scheduleFinish <- true
-			mr.Unlock()
-			return
-		}
-		mr.Unlock()		
-	}
+type stack struct {
+     lock sync.Mutex // you don't have to do this if you don't want thread safety
+     s []int
 }
+
+func NewStack() *stack {
+    return &stack {sync.Mutex{}, make([]int,0), }
+}
+
+func (s *stack) Push(v int) {
+    s.lock.Lock()
+    defer s.lock.Unlock()
+
+    s.s = append(s.s, v)
+}
+
+func (s *stack) Pop() (int) {
+    s.lock.Lock()
+    defer s.lock.Unlock()
+    l := len(s.s)
+
+    res := s.s[l-1]
+
+    s.s = s.s[:l-1]
+
+    return res
+}
+
+func (s *stack) Empty() bool {
+	return (len(s.s)==0)
+}
+
+
+func (mr *Master) WorkerThread(u_fin_task int, argtemplate DoTaskArgs, 
+	workername string, wg *sync.WaitGroup) {
+	fmt.Printf("Worker: %s thread is scheduled to work\n", workername)
+	next_task := argtemplate
+	next_task.File = mr.files[u_fin_task]
+	next_task.TaskNumber = (u_fin_task)
+	ok := call(workername, "Worker.DoTask", next_task, new(struct{}))
+
+	if(ok == false) {
+		fmt.Printf("Worker: RPC %s DoTask error\n", workername)
+		go func() {
+			mr.registerChannel <- ("Failed " + strconv.Itoa(u_fin_task))
+		}()
+	}else {
+		go func() {
+			mr.registerChannel <- workername
+		}()
+	 	wg.Done()
+	}
+
+}
+
 
 
 
@@ -43,7 +70,7 @@ func (mr *Master) WorkerThread(u_fin_task *int, fin_task *int, argtemplate DoTas
 func (mr *Master) schedule(phase jobPhase) {
 	var ntasks int
 	var nios int // number of inputs (for reduce) or outputs (for map)
-	
+	var wg sync.WaitGroup
 	switch phase {
 	case mapPhase:
 		ntasks = len(mr.files)
@@ -54,6 +81,7 @@ func (mr *Master) schedule(phase jobPhase) {
 	}
 
 	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
+	taskarg := DoTaskArgs{mr.jobName, "", phase, 0, nios}
 
 	// All ntasks tasks have to be scheduled on workers, and only once all of
 	// them have been completed successfully should the function return.
@@ -62,30 +90,28 @@ func (mr *Master) schedule(phase jobPhase) {
 	//
 	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
 	//
-	u_fin_task  := 0
-	fin_task := 0
-	quit := make(chan bool)
-	for{
-		select {
-			case reg_chanel := <-mr.registerChannel:
-				fmt.Printf("Schdule recive register: worker %s\n", reg_chanel)
-			default:
-				fmt.Printf("Schdule Registed %d workers\n", len(mr.workers))
-				break
+	failed_tasks_stack := NewStack()
+	task := 0
+	for{	
+		register_response := <-mr.registerChannel
+		if(strings.Contains(register_response, "Failed")) {
+			tokens := strings.Split(register_response, " ")
+			failed_task,_ := strconv.Atoi(tokens[1])
+			failed_tasks_stack.Push(failed_task)
+		} else  {
+			if(failed_tasks_stack.Empty()) {
+				wg.Add(1)
+				go mr.WorkerThread(task, taskarg, register_response, &wg)
+				task++			
+				if(task>=ntasks) {
+					break
+				}
+			}else {
+				p_task := failed_tasks_stack.Pop()
+				go mr.WorkerThread(p_task, taskarg, register_response, &wg)
+			}
 		}
-		break
-	}
-	fmt.Printf("REGINTEATION PHASE DONE\n")
-	numworkers := len(mr.workers)
-	taskarg := DoTaskArgs{mr.jobName, "", phase, 0, nios}
-	for i := 0; i < numworkers; i++ {
-		go mr.WorkerThread(&u_fin_task, &fin_task, taskarg, 
-			mr.workers[i], ntasks, quit)
-	}
-
-	if(<-quit) {
-		fmt.Printf("Schedule: %v phase done\n", phase)
-		return
-	}
-
+	}	
+	wg.Wait()
+	fmt.Printf("Schedule: %v tasks (%d I/Os) IS DONE!\n", phase, nios)
 }
