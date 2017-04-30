@@ -121,11 +121,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRply)
 //dcandiate state grant a vote,
 //or recive a append entries from new leader 
 func (rf *Raft) ConvertToFollower() {
+	DPrintf("%d(term %d) recived converted to follower", 
+		rf.me, rf.GetCurrentTerm())
+
 	// if(rf.GetCurrentState() == Follower)  {
 	// 	return
 	// }
-	DPrintf("%d(term %d) recived converted to follower", 
-		rf.me, rf.GetCurrentTerm())
 
 	if(rf.GetCurrentState() == Candidate) {
 		rf.electionTimer.Pause()
@@ -210,6 +211,7 @@ func (rf *Raft) readPersist(data []byte) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	DPrintf("%d sending request vote to %d", rf.me, server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -317,6 +319,7 @@ func (rf *Raft) PromoteToCandidate() {
 	rf.IncreseCurrentTerm()
 	rf.SetVoteFor(rf.me)
 	rf.ChangeState(Candidate)
+	rf.electionTimer.Reset()
 }	
 // start election process
 // this is the thread that start the election 
@@ -340,6 +343,8 @@ func (rf *Raft) ElectionProcess() {
 						return
 					}
 					grant_buffer <- rly.VoteGranted
+				}else {
+					DPrintf("%d sending vote request is FAILED", rf.me)
 				}
 			}()
 		}
@@ -349,8 +354,8 @@ func (rf *Raft) ElectionProcess() {
 	majorityVote := rf.GetPeersTotal()/2
 	for {
 		select {
-			case success := <- grant_buffer:
-				if(success) {
+			case is_success := <- grant_buffer:
+				if(is_success) {
 					successCount++
 				}
 				if(successCount>majorityVote) {
@@ -400,6 +405,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		DPrintf("%d(term %d) granted the vote to %d", 
 			rf.me, rf.GetCurrentTerm(), args.CandidateId)
 		reply.VoteGranted = true
+		rf.SetVoteFor(args.CandidateId)
 		return		
 	} 
 	DPrintf("Not vote granted for %d", rf.me) 
@@ -494,8 +500,3 @@ func (rf *Raft) SetVoteFor(id int) {
 	rf.voteFor = id
 	return
 }
-
-
-
-
-

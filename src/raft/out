@@ -1,4 +1,4 @@
-Test (2A): initial election ...
-  ... Passed
+Test (2A): election after network failure ...
+2 has been disconnected  ... Passed
 PASS
-ok  	raft	2.512s
+ok  	raft	4.516s
