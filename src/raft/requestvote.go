@@ -30,8 +30,6 @@ func (rf *Raft) NewRequestVoteReply() *RequestVoteReply{
 	return msg
 }
 
-
-
 func (rf *Raft) NewRequestVoteArgs() *RequestVoteArgs{
 	rf.mu.Lock()
 	defer rf.mu.Unlock()	

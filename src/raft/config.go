@@ -155,6 +155,7 @@ func (cfg *config) start1(i int) {
 			if m.UseSnapshot {
 				// ignore the snapshot
 			} else if v, ok := (m.Command).(int); ok {
+				BPrintf("#%dconfig recived a commited command %d and index is %d",i, v, m.Index )
 				cfg.mu.Lock()
 				for j := 0; j < len(cfg.logs); j++ {
 					if old, oldok := cfg.logs[j][m.Index]; oldok && old != v {
@@ -165,6 +166,8 @@ func (cfg *config) start1(i int) {
 				}
 				_, prevok := cfg.logs[i][m.Index-1]
 				cfg.logs[i][m.Index] = v
+				BPrintf("%d log files are %v", i, cfg.logs[i] )
+
 				cfg.mu.Unlock()
 
 				if m.Index > 1 && prevok == false {
@@ -230,7 +233,7 @@ func (cfg *config) connect(i int) {
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
-
+	BPrintf("disconnected  %d", i)
 	cfg.connected[i] = false
 
 	// outgoing ClientEnds
@@ -387,6 +390,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // as do the threads that read from applyCh.
 // returns index.
 func (cfg *config) one(cmd int, expectedServers int) int {
+	BPrintf("starting the one cmd %d", cmd)
 	t0 := time.Now()
 	starts := 0
 	for time.Since(t0).Seconds() < 10 {
@@ -415,6 +419,8 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				//BPrintf("nd is %d", nd)
+
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {

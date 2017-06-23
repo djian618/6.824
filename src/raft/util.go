@@ -3,7 +3,8 @@ package raft
 import "log"
 import "os"
 // Debugging
-const Debug = 0
+const Debug = 1
+const Bebug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug == 1 {
@@ -17,6 +18,19 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 		log.Printf(format, a...)
 
 	}
-
 	return
+}
+
+func BPrintf(format string, a ...interface{}) (n int, err error) {
+	if Bebug == 1 {
+		log.Printf(format, a...)
+	}
+	return
+}
+
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
 }

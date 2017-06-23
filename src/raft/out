@@ -1,4 +1,6 @@
-Test (2A): election after network failure ...
-2 has been disconnected  ... Passed
-PASS
-ok  	raft	4.516s
+Test (2B): basic agreement ...
+--- FAIL: TestBasicAgree2B (10.35s)
+	config.go:432: one(100) failed to reach agreement
+FAIL
+exit status 1
+FAIL	raft	10.361s
