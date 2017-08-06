@@ -21,6 +21,7 @@ import (
 	"sync"
 	"labrpc"
 	"time"
+	"log"
 //	"sync/atomic"
 )
 
@@ -83,6 +84,8 @@ type Raft struct {
 	//prevLogIndex int
 	electionTimer	*Timer
 	heartbeatTimer  *Timer
+	//check if it has been killed
+	isKilled bool
 }
 
 //--------------------------------------
@@ -106,17 +109,20 @@ func (rf *Raft) InitElectionTimoutFunc() {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, myreply *AppendEntriesRply) {
 	// Your code here (2A, 2B).
-		BPrintf("%d recives a append entries from %d with PrevLogIndex%d PrevLogTerm %d and Command is %v", 
-		rf.me, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, args.Entries)
+	if(len(args.Entries)>0) {
+		BPrintf("%d(term %d) recives a append entries from %d with PrevLogIndex%d PrevLogTerm %d Sender Term(%d) and Command is %v", 
+		rf.me, rf.GetCurrentTerm(), args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, args.Term, args.Entries)
+
+	}
 
 	//var myreply AppendEntriesRply
-	if(args.Term > rf.GetCurrentTerm()) {
+	if(args.Term < rf.GetCurrentTerm()) {
 		rf.SetCurrentTerm(args.Term)
 		//convert to follower 
 		myreply.Success = false
 		myreply.Term = rf.GetCurrentTerm()
-		BPrintf("%d REJECT the append Entries because argsterm %d is larger than its own %d", args.Term, rf.GetCurrentTerm())
-		rf.ConvertToFollower()
+		BPrintf("%d REJECT the append Entries because argsterm %d is smaller than its own %d", rf.me, args.Term, rf.GetCurrentTerm())
+		//rf.ConvertToFollower()
 		return
 	}
 
@@ -124,7 +130,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, myreply *AppendEntriesRpl
 	if(!rf.log.TermMatchIndex(args.PrevLogIndex, args.PrevLogTerm)) {
 		myreply.Success = false
 		myreply.Term = rf.GetCurrentTerm()
-		BPrintf("%d REJECT the append Entries because Term does not match Index")
+		BPrintf("%d REJECT the append Entries because current Term %d does not match prevLogTerm %d", rf.me, myreply.Term, args.PrevLogTerm)
 		
 		return		
 	}
@@ -143,8 +149,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, myreply *AppendEntriesRpl
 		rf.commitIndex = nextCommitIndex
 	}
 	
-
-
 	myreply.Success = true
 	myreply.Term = rf.GetCurrentTerm()
 	rf.electionTimer.Reset()
@@ -159,7 +163,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, myreply *AppendEntriesRpl
 //dcandiate state grant a vote,
 //or recive a append entries from new leader 
 func (rf *Raft) ConvertToFollower() {
-	DPrintf("%d(term %d) recived converted to follower", 
+	BPrintf("%d(term %d) recived converted to follower", 
 		rf.me, rf.GetCurrentTerm())
 
 	// if(rf.GetCurrentState() == Follower)  {
@@ -256,42 +260,54 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool) {
 	prevLogIndex := rf.GetNextIndexForPeer(pid)
 	for {
-		rf.mu.Lock()
-		
-		// if(*is_done) {
-		// 	rf.mu.Unlock()
-		// 	return
-		// }
 
-		BPrintf("append entry to the replica for follower %d with prevLogIndex is %d", pid, prevLogIndex)
-		appendEntrymsg := rf.NewAppendEntriesMsg(prevLogIndex)
-		rly := rf.NewAppendEntriesRly()
-		success := rf.sendHeartBeat(pid, appendEntrymsg, rly)
-		if(success) {
-			if(rly.Success) {
-				//If successful: update nextIndex and matchIndex for follower
-				//should set the match index but leave for now
-				rf.SetNextIndexForPeer(pid, rf.log.GetLastIndex())
-				rf.flushcount++
-				BPrintf("Increase the flushCount to %d", rf.flushcount)
-				if(rf.flushcount >= (rf.GetPeersTotal())/2) {
-					//rf.cond.L.Unlock()
-					if(*is_done == false) {
-						*is_done = true
-						BPrintf("command has replicated to majority of replicas send Signal")
-						rf.SendCommitLogInfo(rf.GetCommitIndex(), rf.log.GetLastIndex())
-						rf.SetCommitIndex(rf.log.GetLastIndex());
-					}
-
-				}
-				rf.mu.Unlock()
+		select {
+		case _, ok := <- c:
+			if(!ok) {
+				BPrintf("the ok channel has been closed may be %d has become to follower", rf.me)
 				return
-			}else {
-				//BPrintf("The append entry falied for follower %d", pid)
-				rf.DecNextIndexForPeer(pid)
 			}
+		default :	
+			BPrintf("%d send append entry to the replica for follower %d with prevLogIndex is %d",rf.me, pid, prevLogIndex)
+			appendEntrymsg := rf.NewAppendEntriesMsg(prevLogIndex)
+			rly := rf.NewAppendEntriesRly()
+			success := rf.sendHeartBeat(pid, appendEntrymsg, rly)
+			if(success) {
+				if(rly.Success) {
+					//If successful: update nextIndex and matchIndex for follower
+					//should set the match index but leave for now
+					rf.SetNextIndexForPeer(pid, rf.log.GetLastIndex())
+
+					rf.mu.Lock()
+					rf.flushcount++
+					BPrintf("%d Increase the flushCount to %d", rf.me, rf.flushcount)
+					if(rf.flushcount >= (rf.GetPeersTotal())/2) {
+						//rf.cond.L.Unlock()
+						if(*is_done == false) {
+							*is_done = true
+							BPrintf("command has replicated to majority of replicas send Signal")
+							rf.SendCommitLogInfo(rf.GetCommitIndex(), rf.log.GetLastIndex())
+							rf.SetCommitIndex(rf.log.GetLastIndex());
+						}
+
+					}
+					rf.mu.Unlock()
+					return
+				}else {
+					//BPrintf("The append entry falied for follower %d", pid)
+					if(rly.Term > rf.GetCurrentTerm()) {
+						BPrintf("%d closed its channel", rf.me)
+						close(c)
+						rf.SetCurrentTerm(rly.Term)
+						rf.ConvertToFollower()
+						return
+					}
+					rf.DecNextIndexForPeer(pid)
+				}
+			}
+			BPrintf("%d Unlock the mutex", rf.me)
 		}
-		rf.mu.Unlock()
+		//rf.mu.Unlock()
 	}
 }
 
@@ -304,6 +320,7 @@ func (rf *Raft) FlushoutReplica(c chan int) {
 	for i, _ := range rf.peers {
 		if(i!=rf.me){
 			index := i
+			BPrintf("initalize thread to appendReplica to %d", i)
 			go rf.appendToReplica(index, c, &is_done)
 		}
 	}
@@ -379,7 +396,8 @@ func (rf *Raft) SendCommitLogInfo(begin int, end int) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
-	DPrintf("%d has been KILLED!!", rf.me)
+	log.Printf("%d has been KILLED!!", rf.me)
+	rf.isKilled = true;
 }
 
 
@@ -397,11 +415,16 @@ func (rf *Raft) sendHeartBeat(server int, args *AppendEntriesArgs, reply *Append
 //we should just use a thread to send it 
 func (rf *Raft) BroadcastHeartBeat() {
 	for i, _ := range rf.peers {
+		if(rf.isKilled) {
+			return;
+		}
 		if(i!=rf.me){
 			pid := i
+			//BPrintf("Planning to send i %d with %d of peers", i, len(rf.peers))
+
 			go func() { 
 				appendEntrymsg := rf.NewHeartBeatMsg(rf.GetNextIndexForPeer(pid))
-				DPrintf("Planning to send pid %d", pid)
+				//BPrintf("Planning to send pid %d", pid)
 				rly := rf.NewAppendEntriesRly()
 				rf.sendHeartBeat(pid, appendEntrymsg, rly)
 			}()
@@ -413,6 +436,9 @@ func (rf *Raft) BroadcastHeartBeat() {
 
 func (rf *Raft) heartbeatGenerator() {
 	for{
+		if(rf.isKilled) {
+			return
+		}
 		<- rf.heartbeatTimer.C()
 		DPrintf("%d start sending heartbeat", rf.me)
 		rf.BroadcastHeartBeat()
@@ -423,7 +449,7 @@ func (rf *Raft) heartbeatGenerator() {
 // Promotion to leader
 //--------------------------------------
 func (rf *Raft) PromoteToLeader() {
-	DPrintf("%d Promoted to Leader", rf.me)
+	BPrintf("%d Promoted to Leader", rf.me)
 	rf.ChangeState(Leader)
 	//reinitalize a nexindex and matched index for this leader
 	// rf.InitmatchIndex()
@@ -485,8 +511,12 @@ func (rf *Raft) ElectionProcess() {
 					//pause timer update to learder
 					rf.PromoteToLeader()
 				}
-			case  <-rf.electionTimer.C():
-				DPrintf("%d restart the election process", rf.me)
+			case <-rf.electionTimer.C():
+				if(rf.isKilled) {
+					DPrintf("the timer has been close")
+					return;
+				}
+				BPrintf("%d restart the election process", rf.me)
 				//when the retart begin, the current state may not
 				//be candidate
 				go rf.ElectionProcess()
@@ -513,7 +543,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	
 	if (rf.GetCurrentTerm()>args.Term) {
 		reply.VoteGranted = false
-		reply.Term = args.Term
+		reply.Term = rf.GetCurrentTerm()
 		return
 	}
 
@@ -559,22 +589,26 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.cond = sync.NewCond(&rf.mu)
 	rf.applych = applyCh
+	
 	// Your initialization code here (2A, 2B, 2C).
 	rf.ChangeState(Follower)
 	rf.log = NewLog()
 	rf.SetCurrentTerm(0)
 	rf.SetVoteFor(Nobody)
-	rf.electionTimer = NewTimer(DefaultElectionTimeout, 2*DefaultElectionTimeout)
+	rf.electionTimer = NewTimer(DefaultElectionTimeout, 3*DefaultElectionTimeout)
 	rf.heartbeatTimer = NewTimer(DefaultHeartbeatTimeout, DefaultHeartbeatTimeout)
+	
 	//initalize property for flush appendentries
 	rf.nextIndex = make([]int, len(peers))
+	
 	// rf.matchIndex = make([]int, len(peer))
 	rf.flushcount = 0
+	rf.isKilled = false;
 	//rf.prevLogIndex = 0
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	rf.heartbeatTimer.Pause()
-	DPrintf("Initalize Peer %d", me)
+	log.Printf("Initalize Peer %d with total peers %d", me, len(rf.peers))
 	go rf.InitElectionTimoutFunc()
 	return rf
 }

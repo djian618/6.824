@@ -48,8 +48,8 @@ func (l *Log) GetCurrentTerm() int {
 
 
 func (l *Log) GetTermFromIndex(index int) int{
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
+	// l.mutex.Lock()
+	// defer l.mutex.Unlock()
 	if(index==0) {
 		return 0
 	}
@@ -110,8 +110,9 @@ func (l *Log) TruncateLogAfter(index int) {
 	}
 	if(index == 0) {
 		l.entries = nil
+		return
 	}
-	l.entries = l.entries[:index-1]
+	l.entries = l.entries[:index]
 }
 // append entries to log
 func(l *Log) AppendEntries(entries_append []LogEntry) {
