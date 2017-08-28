@@ -2,6 +2,7 @@ package raft
 
 import (
 	"sync"
+	"fmt"
 )
 
 type Log struct {
@@ -35,7 +36,6 @@ func (l *Log) GetCommandFromIndex(i int) int{
 	return l.entries[i].Command.(int)
 }
 
-
 func (l *Log) GetCurrentTerm() int {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
@@ -46,16 +46,28 @@ func (l *Log) GetCurrentTerm() int {
 	}
 }
 
-
 func (l *Log) GetTermFromIndex(index int) int{
 	// l.mutex.Lock()
 	// defer l.mutex.Unlock()
 	if(index==0) {
 		return 0
 	}
+
+	if(index > len(l.entries)  || (index==0)) {
+		fmt.Printf("index %d greater than its len %d", index, len(l.entries))
+	}
 	return l.entries[index-1].Term
 }
 
+func (l *Log) GetTermForLastIndex() int {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if (len(l.entries)==0) {
+		return 0
+	}else {
+		return l.entries[len(l.entries)-1].Term
+	}
+}
 
 func(l *Log) GetLastCommand() interface {} {
 	return l.entries[len(l.entries)-1].Command
@@ -114,6 +126,7 @@ func (l *Log) TruncateLogAfter(index int) {
 	}
 	l.entries = l.entries[:index]
 }
+
 // append entries to log
 func(l *Log) AppendEntries(entries_append []LogEntry) {
 	l.mutex.Lock()
@@ -127,7 +140,6 @@ func(l *Log) AppendEntry (entry LogEntry) {
 	l.entries = append(l.entries, entry)
 
 }
-
 
 // get logs start from 
 func(l *Log) GettingIndexfrom(index int) []LogEntry {

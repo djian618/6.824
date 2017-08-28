@@ -1,0 +1,17 @@
+raftLog: 2017/08/26 15:43:19 2 Promoted to Leader
+raftLog: 2017/08/26 15:43:20 leader 2 start to flushout replicate its log is [{2 101} {2 102} {2 103} {2 104}]
+raftLog: 2017/08/26 15:43:19 0 log files are map[1:101]
+raftLog: 2017/08/26 15:43:19 1 log files are map[1:101]
+
+disconnected  2
+
+raftLog: 2017/08/26 15:43:20 0 Promoted to Leader
+raftLog: 2017/08/26 15:43:20 leader 0 start to flushout replicate its log is [{2 101} {3 103}]
+raftLog: 2017/08/26 15:43:20 1 appendentries success! current log entries are [{2 101} {3 103}]
+
+
+raftLog: 2017/08/26 15:43:21 leader 2 start to flushout replicate its log is [{2 101} {2 102} {2 103} {2 104} {2 104}]
+raftLog: 2017/08/26 15:43:21 2 send append entry to the replica for follower 1 with prevLogIndex is 1
+raftLog: 2017/08/26 15:43:21 2 send append entry to the replica for follower 0 with prevLogIndex is 1
+raftLog: 2017/08/26 15:43:21 1(term 3) recives a append entries from 2 with PrevLogIndex1 PrevLogTerm 2 Sender Term(2) and Command is [{2 102} {2 103} {2 104} {2 104}]
+raftLog: 2017/08/26 15:43:21 1 REJECT the append Entries because argsterm 2 is smaller than its own 3

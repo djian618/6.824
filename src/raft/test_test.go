@@ -207,6 +207,7 @@ loop:
 
 		iters := 5
 		var wg sync.WaitGroup
+
 		is := make(chan int, iters)
 		for ii := 0; ii < iters; ii++ {
 			wg.Add(1)
@@ -269,6 +270,9 @@ loop:
 				}
 			}
 			if ok == false {
+				for pid := 0; pid<3; pid++ {
+					fmt.Printf("pid %d 's log is %v\n", pid, cfg.logs[pid])
+				}
 				t.Fatalf("cmd %v missing in %v", x, cmds)
 			}
 		}
@@ -296,6 +300,7 @@ func TestRejoin2B(t *testing.T) {
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
+	BPrintf("disconnected %d", leader1)
 
 	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
@@ -308,14 +313,16 @@ func TestRejoin2B(t *testing.T) {
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
-
+	BPrintf("disconnected %d", leader2)
 	// old leader connected again
 	cfg.connect(leader1)
+	BPrintf("connect %d", leader1)
 
 	cfg.one(104, 2)
 
 	// all together now
 	cfg.connect(leader2)
+	BPrintf("connect %d", leader2)
 
 	cfg.one(105, servers)
 

@@ -65,6 +65,7 @@ type ApplyMsg struct {
 
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	startmu   sync.Mutex
 	cond      *sync.Cond 		  // conditional variable that is used for sending applymsg
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
@@ -81,6 +82,7 @@ type Raft struct {
 	lastApplied int 
 	flushcount  int 
 	nextIndex   []int
+	matchIndex  []int
 	//prevLogIndex int
 	electionTimer	*Timer
 	heartbeatTimer  *Timer
@@ -268,6 +270,9 @@ func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool) {
 				return
 			}
 		default :	
+			if(rf.GetCurrentState() != Leader) {
+				return
+			}
 			BPrintf("%d send append entry to the replica for follower %d with prevLogIndex is %d",rf.me, pid, prevLogIndex)
 			appendEntrymsg := rf.NewAppendEntriesMsg(prevLogIndex)
 			rly := rf.NewAppendEntriesRly()
@@ -277,7 +282,7 @@ func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool) {
 					//If successful: update nextIndex and matchIndex for follower
 					//should set the match index but leave for now
 					rf.SetNextIndexForPeer(pid, rf.log.GetLastIndex())
-
+					rf.SetMatchIndexForPeer(pid, rf.log.GetLastIndex())
 					rf.mu.Lock()
 					rf.flushcount++
 					BPrintf("%d Increase the flushCount to %d", rf.me, rf.flushcount)
@@ -343,6 +348,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// index := -1
 	// term := -1
 	// isLeader := true
+	rf.startmu.Lock()
+	defer rf.startmu.Unlock()
 	BPrintf("%d start to recieve the Command %d", rf.me, command)
 	if(rf.GetCurrentState() == Leader) {
 		newEntry := LogEntry{rf.GetCurrentTerm(), command}
@@ -423,10 +430,21 @@ func (rf *Raft) BroadcastHeartBeat() {
 			//BPrintf("Planning to send i %d with %d of peers", i, len(rf.peers))
 
 			go func() { 
-				appendEntrymsg := rf.NewHeartBeatMsg(rf.GetNextIndexForPeer(pid))
-				//BPrintf("Planning to send pid %d", pid)
+				BPrintf("%d Planning to send pid %d with prevIndex %d", rf.me, pid, rf.GetMatchIndexForPeer(pid))
+				appendEntrymsg := rf.NewAppendEntriesMsg(rf.GetMatchIndexForPeer(pid))
 				rly := rf.NewAppendEntriesRly()
-				rf.sendHeartBeat(pid, appendEntrymsg, rly)
+				success := rf.sendHeartBeat(pid, appendEntrymsg, rly)
+				if(success) {
+					if(rly.Success) {
+						rf.SetMatchIndexForPeer(pid, rf.log.GetLastIndex())
+					} else {
+					if(rly.Term > rf.GetCurrentTerm()) {
+						rf.SetCurrentTerm(rly.Term)
+						rf.ConvertToFollower()
+						return
+					}					
+				}
+				} 
 			}()
 		}
 	}
@@ -438,6 +456,9 @@ func (rf *Raft) heartbeatGenerator() {
 	for{
 		if(rf.isKilled) {
 			return
+		}
+		if(rf.GetCurrentState() != Leader) {
+			return;
 		}
 		<- rf.heartbeatTimer.C()
 		DPrintf("%d start sending heartbeat", rf.me)
@@ -452,7 +473,7 @@ func (rf *Raft) PromoteToLeader() {
 	BPrintf("%d Promoted to Leader", rf.me)
 	rf.ChangeState(Leader)
 	//reinitalize a nexindex and matched index for this leader
-	// rf.InitmatchIndex()
+	rf.InitmatchIndex()
 	rf.InitNextIndex()
 	rf.flushcount = 0
 	rf.electionTimer.Pause()
@@ -538,8 +559,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	reply.Term = rf.currentTerm
 
-	DPrintf("%d(term %d) recived a request vote from %d term(%d) its vote for %d", 
-		rf.me, rf.GetCurrentTerm(), args.CandidateId, args.Term, rf.voteFor)
+	BPrintf("%d(term %d) recived a request vote from %d term(%d) its vote for %d, RequestVoteArgs is %v", 
+		rf.me, rf.GetCurrentTerm(), args.CandidateId, args.Term, rf.voteFor, *args)
 	
 	if (rf.GetCurrentTerm()>args.Term) {
 		reply.VoteGranted = false
@@ -547,15 +568,35 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	if (rf.log.GetLastIndex() > args.LastLogIndex) {
+	/*
+	Raft determines which of two logs is more up-to-date
+	by comparing the index and term of the last entries in the
+	logs. If the logs have last entries with different terms, then
+	the log with the later term is more up-to-date. If the logs
+	end with the same term, then whichever log is longer is
+	more up-to-date.
+	*/
+	//
+	//if(rf.log.IsEmpty()==false) {
+	BPrintf("test upto date")
+	if ( (rf.log.GetTermForLastIndex() > args.LastLogTerm) ||
+		((rf.log.GetTermForLastIndex() == args.LastLogTerm) && (rf.log.GetLastIndex() > args.LastLogIndex )) ) {
+		BPrintf("%d reject vote from  %d", rf.me, args.CandidateId)
 		reply.VoteGranted = false
 		reply.Term = args.Term
 		return
 	}
+	//}
+
+	// if (rf.log.GetLastIndex() > args.LastLogIndex) {
+	// 	reply.VoteGranted = false
+	// 	reply.Term = args.Term
+	// 	return
+	// }
 
 	if(rf.GetCurrentTerm()<args.Term) {
-		rf.SetCurrentTerm(args.Term)
 		rf.ConvertToFollower()
+		rf.SetCurrentTerm(args.Term)
 	}
 
 	if ( (rf.GetVoteFor() == Nobody)  )  {
@@ -601,7 +642,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//initalize property for flush appendentries
 	rf.nextIndex = make([]int, len(peers))
 	
-	// rf.matchIndex = make([]int, len(peer))
+	rf.matchIndex = make([]int, len(peers))
+
 	rf.flushcount = 0
 	rf.isKilled = false;
 	//rf.prevLogIndex = 0
@@ -665,18 +707,16 @@ func (rf *Raft) GetlastApplied () int {
 }
 
 func(rf *Raft) InitNextIndex() {
-	rf.mu.Lock()
-	rf.mu.Unlock()
 	for i:=0; i<len(rf.peers); i++ {
 		rf.nextIndex[i] = rf.log.GetLastIndex()
 	}
 }
 
-// func(rf *Raft) InitmatchIndex() {
-// 	for(int i=0; i<len(rf.peers); ++i) {
-// 		rf.matchIndex[i] = 0
-// 	}
-// }
+func(rf *Raft) InitmatchIndex() {
+	for i:=0; i<len(rf.peers); i++ {
+		rf.matchIndex[i] = 0
+	}
+}
 
 func (rf *Raft) GetNextIndexForPeer(pid int) int {
 	rf.mu.Lock()
@@ -688,11 +728,13 @@ func (rf *Raft) SetNextIndexForPeer(pid int, val int) {
 	rf.nextIndex[pid] = val
 }
 
-// func (rf *raft) GetMatchIndexForPeer(pid int) {
-// 	rf.mu.Lock()
-// 	defer rf.mu.Unlock()
-// 	return rf.matchIndex[pid]
-// }
+func (rf *Raft) GetMatchIndexForPeer(pid int) int{
+	return rf.matchIndex[pid]
+}
+
+func (rf *Raft) SetMatchIndexForPeer(pid int, index int) {
+	rf.matchIndex[pid] = index
+}
 
 func (rf *Raft) DecNextIndexForPeer(pid int) {
 	if(rf.nextIndex[pid]==0) { 
@@ -700,12 +742,6 @@ func (rf *Raft) DecNextIndexForPeer(pid int) {
 	}
 	rf.nextIndex[pid]--
 }
-
-// func (rf *raft) SetMatchIndexForPeer(pid int, index int) {
-// 	rf.mu.Lock()
-// 	defer rf.mu.Unlock()
-// 	rf.matchIndex[pid] = index
-// }
 
 func (rf *Raft) SetCommitIndex(index int) {
 	rf.commitIndex = index
