@@ -136,7 +136,7 @@ func (cfg *config) start1(i int) {
 	cfg.mu.Lock()
 
 	// a fresh persister, so old instance doesn't overwrite
-	// new instance's persisted state.
+	// new instance's persisted state.f
 	// but copy old persister's content so that we always
 	// pass Make() the last persisted state.
 	if cfg.saved[i] != nil {
@@ -210,6 +210,7 @@ func (cfg *config) cleanup() {
 // attach server i to the net.
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
+	BPrintf("CONNNECTED %d", i)
 
 	cfg.connected[i] = true
 
@@ -233,6 +234,7 @@ func (cfg *config) connect(i int) {
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
+	BPrintf("DISCONNNECTED %d", i)
 	fmt.Printf("disconnected  %d\n", i)
 	cfg.connected[i] = false
 
