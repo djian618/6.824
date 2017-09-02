@@ -259,58 +259,63 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool) {
+func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool, flushCount *int) {
 	prevLogIndex := rf.GetNextIndexForPeer(pid)
 	for {
-
 		select {
-		case _, ok := <- c:
-			if(!ok) {
-				BPrintf("the ok channel has been closed may be %d has become to follower", rf.me)
-				return
-			}
-		default :	
-			if(rf.GetCurrentState() != Leader) {
-				return
-			}
-			BPrintf("%d send append entry to the replica for follower %d with prevLogIndex is %d",rf.me, pid, prevLogIndex)
-			appendEntrymsg := rf.NewAppendEntriesMsg(prevLogIndex)
-			rly := rf.NewAppendEntriesRly()
-			success := rf.sendHeartBeat(pid, appendEntrymsg, rly)
-			if(success) {
-				if(rly.Success) {
-					//If successful: update nextIndex and matchIndex for follower
-					//should set the match index but leave for now
-					rf.SetNextIndexForPeer(pid, rf.log.GetLastIndex())
-					rf.SetMatchIndexForPeer(pid, rf.log.GetLastIndex())
-					rf.mu.Lock()
-					rf.flushcount++
-					BPrintf("%d Increase the flushCount to %d", rf.me, rf.flushcount)
-					if(rf.flushcount >= (rf.GetPeersTotal())/2) {
-						//rf.cond.L.Unlock()
-						if(*is_done == false) {
-							*is_done = true
-							BPrintf("command has replicated to majority of replicas send Signal")
-							rf.SendCommitLogInfo(rf.GetCommitIndex(), rf.log.GetLastIndex())
-							rf.SetCommitIndex(rf.log.GetLastIndex());
-						}
-
-					}
-					rf.mu.Unlock()
+			case _, ok := <- c:
+				if(!ok) {
+					BPrintf("the ok channel has been closed may be %d has become to follower", rf.me)
 					return
-				}else {
-					//BPrintf("The append entry falied for follower %d", pid)
-					if(rly.Term > rf.GetCurrentTerm()) {
-						BPrintf("%d closed its channel", rf.me)
-						close(c)
-						rf.SetCurrentTerm(rly.Term)
-						rf.ConvertToFollower()
-						return
-					}
-					rf.DecNextIndexForPeer(pid)
 				}
-			}
-			BPrintf("%d Unlock the mutex", rf.me)
+			default :	
+				if(rf.GetCurrentState() != Leader) {
+					return
+				}
+				BPrintf("%d send append entry to the replica for follower %d with prevLogIndex is %d",rf.me, pid, prevLogIndex)
+				appendEntrymsg := rf.NewAppendEntriesMsg(prevLogIndex)
+				rly := rf.NewAppendEntriesRly()
+				success := rf.sendHeartBeat(pid, appendEntrymsg, rly)
+				if(success) {
+					if(rly.Success) {
+						//If successful: update nextIndex and matchIndex for follower
+						//should set the match index but leave for now
+						rf.SetNextIndexForPeer(pid, rf.log.GetLastIndex())
+						rf.SetMatchIndexForPeer(pid, rf.log.GetLastIndex())
+						rf.mu.Lock()
+
+						(*flushCount)++
+						BPrintf("%d Increase the flushCount to %d", rf.me, (*flushCount))
+						if((*flushCount) >= (rf.GetPeersTotal())/2) {
+							//rf.cond.L.Unlock()
+							if(*is_done == false) {
+								*is_done = true
+								BPrintf("command has replicated to majority of replicas send Signal")
+								rf.SendCommitLogInfo(rf.GetCommitIndex(), rf.log.GetLastIndex())
+								rf.SetCommitIndex(rf.log.GetLastIndex());
+							}
+
+						}
+						rf.mu.Unlock()
+						return
+					}else {
+						//BPrintf("The append entry falied for follower %d", pid)
+						if(rly.Term > rf.GetCurrentTerm()) {
+							rf.startmu.Lock()
+							defer rf.startmu.Unlock()
+							if(rf.GetCurrentState() != Leader) {
+								return
+							}
+							BPrintf("%d closed its channel", rf.me)
+							rf.SetCurrentTerm(rly.Term)
+							rf.ConvertToFollower()
+							close(c)
+							return
+						}
+						rf.DecNextIndexForPeer(pid)
+					}
+				}
+				BPrintf("%d Unlock the mutex", rf.me)
 		}
 		//rf.mu.Unlock()
 	}
@@ -321,12 +326,12 @@ func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool) {
 //send append entry to all the follower 
 func (rf *Raft) FlushoutReplica(c chan int) {
 	is_done := false
-	rf.flushcount = 0
+	flushCount := 0
 	for i, _ := range rf.peers {
 		if(i!=rf.me){
 			index := i
 			BPrintf("initalize thread to appendReplica to %d", i)
-			go rf.appendToReplica(index, c, &is_done)
+			go rf.appendToReplica(index, c, &is_done, &flushCount)
 		}
 	}
 }
