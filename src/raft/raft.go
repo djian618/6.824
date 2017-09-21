@@ -88,6 +88,9 @@ type Raft struct {
 	heartbeatTimer  *Timer
 	//check if it has been killed
 	isKilled bool
+	fsmRestoreCh chan struct{}
+	shutDown     chan struct{}
+
 }
 
 //--------------------------------------
@@ -108,6 +111,19 @@ func (rf *Raft) InitElectionTimoutFunc() {
     return
 }	
 
+// runFSM is a long running goroutine responsible for applying logs
+// to the FSM. This is done async of other logs since we don't want
+// the FSM to block our internal operations.
+func (rf *Raft) runFSM() {
+	for {
+		select {
+		case req := <-rf.fsmRestoreCh:
+
+
+
+		}
+	}
+}
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, myreply *AppendEntriesRply) {
 	// Your code here (2A, 2B).
@@ -157,10 +173,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, myreply *AppendEntriesRpl
 	return
 }
 
-
-
-
-
 //convert to follower is called when the 
 //dcandiate state grant a vote,
 //or recive a append entries from new leader 
@@ -202,12 +214,15 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(rf.log.entries)
+	e.Encode(rf.log.voteFor)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.voteFor)
+
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -216,10 +231,12 @@ func (rf *Raft) persist() {
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.log.entries)
+	d.Decode(&rf.log.voteFor)
+	d.Decode(&rf.currentTerm)
+	d.Decode(&rf.voteFor)	
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
@@ -259,7 +276,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool, flushCount *int) {
+func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool,  flushCount chan int) {
 	prevLogIndex := rf.GetNextIndexForPeer(pid)
 	for {
 		select {
@@ -273,30 +290,38 @@ func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool, flushCount *
 					return
 				}
 				BPrintf("%d send append entry to the replica for follower %d with prevLogIndex is %d",rf.me, pid, prevLogIndex)
+				
+				rf.startmu.Lock()
 				appendEntrymsg := rf.NewAppendEntriesMsg(prevLogIndex)
+				lastIndex := rf.log.GetLastIndex()
+				rf.startmu.Unlock()
+
 				rly := rf.NewAppendEntriesRly()
 				success := rf.sendHeartBeat(pid, appendEntrymsg, rly)
 				if(success) {
 					if(rly.Success) {
 						//If successful: update nextIndex and matchIndex for follower
 						//should set the match index but leave for now
-						rf.SetNextIndexForPeer(pid, rf.log.GetLastIndex())
-						rf.SetMatchIndexForPeer(pid, rf.log.GetLastIndex())
-						rf.mu.Lock()
-
-						(*flushCount)++
-						BPrintf("%d Increase the flushCount to %d", rf.me, (*flushCount))
-						if((*flushCount) >= (rf.GetPeersTotal())/2) {
+						rf.SetNextIndexForPeer(pid, lastIndex)
+						rf.SetMatchIndexForPeer(pid, lastIndex)
+						// rf.mu.Lock()
+						// rf.flushcount++
+						nextCount := <-flushCount
+						nextCount++
+						BPrintf("%d Increase the flushCount to %d", rf.me, nextCount)
+						if(nextCount == (rf.GetPeersTotal())/2) {
 							//rf.cond.L.Unlock()
-							if(*is_done == false) {
-								*is_done = true
+							// if(*is_done == false) {
+							// 	*is_done = true
 								BPrintf("command has replicated to majority of replicas send Signal")
-								rf.SendCommitLogInfo(rf.GetCommitIndex(), rf.log.GetLastIndex())
-								rf.SetCommitIndex(rf.log.GetLastIndex());
-							}
+								rf.SendCommitLogInfo(rf.GetCommitIndex(), lastIndex)
+								rf.SetCommitIndex(lastIndex)
+								return
+							//}
 
 						}
-						rf.mu.Unlock()
+						flushCount <- nextCount
+						// rf.mu.Unlock()
 						return
 					}else {
 						//BPrintf("The append entry falied for follower %d", pid)
@@ -315,25 +340,24 @@ func (rf *Raft) appendToReplica(pid int, c chan int, is_done *bool, flushCount *
 						rf.DecNextIndexForPeer(pid)
 					}
 				}
-				BPrintf("%d Unlock the mutex", rf.me)
 		}
-		//rf.mu.Unlock()
 	}
 }
-
-
 
 //send append entry to all the follower 
 func (rf *Raft) FlushoutReplica(c chan int) {
 	is_done := false
-	flushCount := 0
+	//rf.flushcount = 0
+	flushCount := make(chan int)
 	for i, _ := range rf.peers {
+		BPrintf("%d initalize thread to appendReplica to %d", rf.me, i)
 		if(i!=rf.me){
 			index := i
 			BPrintf("initalize thread to appendReplica to %d", i)
-			go rf.appendToReplica(index, c, &is_done, &flushCount)
+			go rf.appendToReplica(index, c, &is_done, flushCount)
 		}
 	}
+	flushCount <- 0
 }
 
 //
@@ -412,10 +436,6 @@ func (rf *Raft) Kill() {
 	rf.isKilled = true;
 }
 
-
-
-
-
 func (rf *Raft) sendHeartBeat(server int, args *AppendEntriesArgs, reply *AppendEntriesRply) bool {
 	DPrintf("Send heart beat to server %d", server)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
@@ -455,7 +475,6 @@ func (rf *Raft) BroadcastHeartBeat() {
 	}
 	rf.heartbeatTimer.Reset()
 }
-
 
 func (rf *Raft) heartbeatGenerator() {
 	for{
@@ -570,9 +589,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if (rf.GetCurrentTerm()>args.Term) {
 		reply.VoteGranted = false
 		reply.Term = rf.GetCurrentTerm()
+		BPrintf("%d reject vote from  %d, because its term is larger", rf.me)
+
 		return
 	}
-
 	/*
 	Raft determines which of two logs is more up-to-date
 	by comparing the index and term of the last entries in the
@@ -586,18 +606,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	BPrintf("test upto date")
 	if ( (rf.log.GetTermForLastIndex() > args.LastLogTerm) ||
 		((rf.log.GetTermForLastIndex() == args.LastLogTerm) && (rf.log.GetLastIndex() > args.LastLogIndex )) ) {
-		BPrintf("%d reject vote from  %d", rf.me, args.CandidateId)
+		BPrintf("%d reject vote from  %d, its log is %v", rf.me, args.CandidateId, rf.log.entries)
 		reply.VoteGranted = false
 		reply.Term = args.Term
 		return
 	}
-	//}
-
-	// if (rf.log.GetLastIndex() > args.LastLogIndex) {
-	// 	reply.VoteGranted = false
-	// 	reply.Term = args.Term
-	// 	return
-	// }
 
 	if(rf.GetCurrentTerm()<args.Term) {
 		rf.ConvertToFollower()
