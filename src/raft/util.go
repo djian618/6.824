@@ -1,22 +1,13 @@
 package raft
 
 import "log"
-import "os"
+
 // Debugging
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug == 1 {
+	if Debug > 0 {
 		log.Printf(format, a...)
 	}
-	if Debug ==2 {
-		f, _ := os.OpenFile("testlogfile", os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
-		defer f.Close()
-
-		log.SetOutput(f)
-		log.Printf(format, a...)
-
-	}
-
 	return
 }

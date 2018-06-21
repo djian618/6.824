@@ -1,4 +1,0 @@
-Test (2A): election after network failure ...
-2 has been disconnected  ... Passed
-PASS
-ok  	raft	4.516s
