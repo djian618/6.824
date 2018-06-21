@@ -55,7 +55,7 @@ func (ck *Clerk) runServers(args interface{}) string{
 			        case PutAppendArgs:
 			        	var reply PutAppendReply
 			        	var putAppendReq = args.(PutAppendArgs)
-			        	//DPrintf("PutAppendArgs %v", putAppendReq)
+			        	FPrintf("PutAppendArgs %v", putAppendReq)
 			        	ok := server.Call("RaftKV.PutAppend", &putAppendReq, &reply)
 			        	if ok {
 				        	// DPrintf("PutAppend Reply WrongLeader %v", reply.WrongLeader)
@@ -70,10 +70,10 @@ func (ck *Clerk) runServers(args interface{}) string{
 			        case GetArgs:
 			        	var reply GetReply
 			        	var getReq = args.(GetArgs)
-			        	DPrintf("Client GetArgs %v", getReq)
+			        	FPrintf("Client GetArgs %v", getReq)
 			        	ok := server.Call("RaftKV.Get", &getReq, &reply)
 			        	if ok {
-				        	DPrintf("Client GetArgs Reply WrongLeader %v", reply.WrongLeader)			        		
+				        	FPrintf("Client GetArgs Reply WrongLeader %v", reply.WrongLeader)			        		
 			        		if( (!reply.WrongLeader) && (reply.Err != TimeOutErr) ) {
 			        			DPrintf("Client Get Success %v", reply)			        			
 			        			ck.leader = si
@@ -81,7 +81,7 @@ func (ck *Clerk) runServers(args interface{}) string{
 			        		} 
 			        	}
 			        default:
-			            DPrintf("Unkown Type at runServers")
+			            FPrintf("Unkown Type at runServers")
 			    }
 			}
 		}
@@ -117,6 +117,8 @@ func (ck *Clerk) Get(key string) string {
 	}
 	return ""
 }
+
+
 
 //
 // shared by Put and Append.

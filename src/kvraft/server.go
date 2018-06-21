@@ -11,14 +11,22 @@ import (
 )
 
 // Debugging
-const Debug = 0
+const Debug = 2
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
+	if Debug < 0 {
 		log.Printf(format, a...)
 	}
 	return
 }
+
+func FPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug > 1 {
+		log.Printf(format, a...)
+	}
+	return
+}
+
 
 const (
 	Put = "PUT"
@@ -55,16 +63,16 @@ func getReqKey(reqId int, id int64) string {
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	DPrintf(getReqKey(args.ReqId, args.Id))
-	if val, ok := kv.reqMap[getReqKey(args.ReqId, args.Id)]; ok {
+	if val,ok := kv.CheckDup(args.ReqId, args.Id); ok {
 		DPrintf("duplicated appear")
 		reply.WrongLeader = false
 		reply.Err = ""
 		reply.Value = val
 		return
 	}
+	FPrintf("send  get command %v", args)
 	_, _, ok := kv.rf.Start(Op{Command: Get, Key: args.Key, Value: "", Id: args.Id, ReqId: args.ReqId});
-	DPrintf("Server %v recived Get %v, ok %v",kv.me, args, ok)	
+	FPrintf("Server %v recived Get %v, ok %v",kv.me, args, ok)	
 	if(!ok) {
 		reply.WrongLeader = true
 		return
@@ -87,15 +95,22 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	}
 }
 
+func (kv *RaftKV) CheckDup(reqId int, id int64 ) (string, bool) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	val, ok := kv.reqMap[getReqKey(reqId, id)];
+	return val, ok;
+}
+
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 
-	if _, ok := kv.reqMap[getReqKey(args.ReqId, args.Id)]; ok {
+	if _,ok := kv.CheckDup(args.ReqId, args.Id); ok{
 		DPrintf("duplicated appear")
 		return
 	}
-	_, _, ok := kv.rf.Start(Op{Command: args.Op, Key: args.Key, Value: args.Value, Id: args.Id, ReqId: args.ReqId});    
     DPrintf("Server#%v PutAppend key %v value %v", kv.me, args.Key, args.Value)	
+	_, _, ok := kv.rf.Start(Op{Command: args.Op, Key: args.Key, Value: args.Value, Id: args.Id, ReqId: args.ReqId});    
 	if(!ok) {
 		reply.WrongLeader = true
 		return
@@ -158,11 +173,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.isLeader = false
 	go func() {
 		for m := range kv.applyCh {
-		    //DPrintf("Server #%v recive from applyCh %v", me, m)			        											
+		    DPrintf("Server #%v recive from applyCh %v isleader %v", me, m, kv.isLeader)			        											
 			if v, ok := m.Command.(Op); ok {
 				if(kv.isLeader) {
 					opType := v.Command
-					if _, ok := kv.reqMap[getReqKey(v.ReqId, v.Id)]; !ok{
+					if _, ok := kv.CheckDup(v.ReqId, v.Id); !ok{
 						kv.reqMap[getReqKey(v.ReqId, v.Id)] = "ok"
 						switch  opType {
 							case Append:								

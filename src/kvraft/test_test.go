@@ -14,6 +14,7 @@ import "sync/atomic"
 const electionTimeout = 1 * time.Second
 
 func check(t *testing.T, ck *Clerk, key string, value string) {
+	fmt.Printf("trying to get key %v\n", key);
 	v := ck.Get(key)
 	if v != value {
 		t.Fatalf("Get(%v): expected:\n%v\nreceived:\n%v", key, value, v)
